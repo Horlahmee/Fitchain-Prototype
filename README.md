@@ -176,6 +176,30 @@ This is an MVP demo. Planned upgrades:
 * Social challenges, leaderboards, streak badges
 * Brand partnerships and rewards marketplace
 
+## 🪙 Tokenomics (v0.1 — Prototype)
+
+> **Prototype numbers (not final):** The figures below are **demo/prototype parameters** used for testing the reward loop and UX.  
+> They are **subject to change** as we collect user data, validate anti-cheat, and refine long-term sustainability.
+
+**Token:** $FIT (rewards + in-app utility)
+
+### Earn (Prototype)
+- **10 $FIT** per verified activity (**1 mint/day per wallet**)
+- **Streak bonus:** from **7-day streak**, rewards become **15 $FIT** (1.5×)
+
+### Utility (Planned v0.2+)
+- **Streak Shield:** protect streak for 1 missed day (spend $FIT)
+- **Boost Day:** increase next reward (spend $FIT)
+- **Weekly challenges:** users stake $FIT into pools (retention + community)
+
+### Sustainability (Planned)
+- Daily cap reduces farming/inflation risk
+- Future: global daily emissions cap
+- Future: burn + treasury split on $FIT spending
+
+Goal: move from prototype emissions → sustainable, utility-driven emissions.
+
+
 ---
 
 ## 🔐 Security
