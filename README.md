@@ -15,7 +15,7 @@ The core demo flow:
 4. Mint **FIT** tokens onchain
 5. Dashboard updates with balance + streak + latest transaction UI
 
-This repo is built as a **grant-ready prototype** to validate the UX and onchain reward flow before expanding into a full mobile experience.
+This repo is built as a prototype to validate the UX and onchain reward flow before expanding into a full mobile experience.
 
 ---
 
