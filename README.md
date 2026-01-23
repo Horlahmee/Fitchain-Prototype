@@ -1,5 +1,11 @@
 # FitChain Prototype — Onchain Fitness Rewards (Base Sepolia)
 
+## 🎥 Demo Preview
+
+![FitChain Dashboard](assets/demo-dashboard.png)
+
+![Transaction Success Modal](assets/demo-tx-success.png)
+
 FitChain is a simple **onchain fitness tracker prototype** built on **Base Sepolia**.
 
 The core demo flow:
