@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Provider {
+  STRAVA
+  GOOGLE_FIT
+}
+
+enum ActivityType {
+  RUN
+  WALK
+}
+
+enum ClaimStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  wallet    String   @unique
+  createdAt DateTime @default(now())
+
+  // Auth identifiers
+  email     String?  @unique
+  googleSub String?  @unique
+
+  connections  ProviderConnection[]
+  activities   Activity[]
+  dailyScores  DailyScore[]
+  claims       Claim[]
+  rewardClaims RewardClaim[]
+  inAppWallet  InAppWallet?
+
+  otpCodes      OtpCode[]
+  refreshTokens RefreshToken[]
+
+  badges    UserBadge[]
+  purchases MarketplacePurchase[]
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  email     String
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, createdAt])
+  @@index([userId, createdAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model ProviderConnection {
+  id           String    @id @default(cuid())
+  userId       String
+  provider     Provider
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  scope        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([provider])
+}
+
+model Activity {
+  id                 String       @id @default(cuid())
+  userId             String
+  provider           Provider
+  providerActivityId String
+  type               ActivityType
+  startTime          DateTime
+  durationSec        Int
+  distanceM          Int? // may be null if provider doesn't supply
+  avgSpeedMps        Float? // optional derived
+  rawHash            String // hash of raw payload for integrity
+  createdAt          DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  intensityScore Int @default(0)
+  genuineScore   Int @default(80)
+
+  claimedAt DateTime?
+  claimTx   String?
+  claimId   String?
+
+  @@unique([provider, providerActivityId])
+  @@index([userId, startTime])
+  @@index([provider])
+}
+
+model DailyScore {
+  id            String   @id @default(cuid())
+  userId        String
+  day           DateTime // store as UTC date (00:00) in code
+  points        Int
+  fitSuggested  Int
+  breakdownHash String // hash of scoring breakdown (private)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+  @@index([userId, day])
+}
+
+model Claim {
+  id        String      @id @default(cuid())
+  userId    String
+  day       DateTime
+  claimId   String      @unique // the claim identifier we sign + send onchain
+  fitAmount Int
+  txHash    String?
+  status    ClaimStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+  @@index([userId, day])
+}
+
+model RewardClaim {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  dayKey    String // e.g. "2026-01-25" (UTC)
+  amountFit Decimal @db.Decimal(18, 6)
+  status    String // "PENDING" | "CONFIRMED" | "CANCELLED"
+  txHash    String?
+
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+
+  @@index([userId, dayKey])
+}
+
+// Offchain in-app wallet balance + history (bridge for web2 users)
+model InAppWallet {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  balanceFit Decimal @default(0) @db.Decimal(18, 6)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  txs InAppWalletTx[]
+}
+
+enum InAppWalletTxType {
+  CREDIT
+  DEBIT
+}
+
+model InAppWalletTx {
+  id       String      @id @default(cuid())
+  walletId String
+  wallet   InAppWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  type      InAppWalletTxType
+  amountFit Decimal           @db.Decimal(18, 6)
+  memo      String?
+  ref       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([walletId, createdAt])
+}
+
+// Badge catalog + ownership (offchain)
+model Badge {
+  id       String  @id // stable slug like "b1"
+  rarity   String
+  title    String
+  subtitle String
+  priceFit Decimal @db.Decimal(18, 6)
+
+  createdAt DateTime @default(now())
+
+  owners    UserBadge[]
+  purchases MarketplacePurchase[]
+}
+
+model UserBadge {
+  id      String @id @default(cuid())
+  userId  String
+  badgeId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  source    String // "MARKETPLACE" | "ACHIEVEMENT"
+  createdAt DateTime @default(now())
+
+  @@unique([userId, badgeId])
+  @@index([userId, createdAt])
+}
+
+model MarketplacePurchase {
+  id      String @id @default(cuid())
+  userId  String
+  badgeId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  amountFit Decimal  @db.Decimal(18, 6)
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}

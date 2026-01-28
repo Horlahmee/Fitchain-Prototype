@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "FitChain",
+    "slug": "fitchain",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B1220"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B1220"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "apiBaseUrl": "https://fitchain.duckdns.org/api",
+      "googleClientId": "100437998164-nbpniuldunb9dooackj7b4k8tmosiqtm.apps.googleusercontent.com"
+    }
+  }
+}

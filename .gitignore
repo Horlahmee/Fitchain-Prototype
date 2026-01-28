@@ -3,6 +3,7 @@
 
 # Compilation output
 /dist
+/backend/dist
 
 # pnpm deploy output
 /bundle
@@ -18,3 +19,20 @@
 
 # Hardhat coverage reports
 /coverage
+
+# Env files
+.env
+**/.env
+
+# Next.js / Expo
+frontend/.next
+frontend/out
+mobile/.expo
+mobile/.expo-shared
+mobile/web-build
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log

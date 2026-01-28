@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   useAccount,
   useBalance,
-  useChainId,
   useConnect,
   useDisconnect,
   useReadContract,
@@ -13,20 +13,30 @@ import {
   useWriteContract,
 } from "wagmi";
 import { baseSepolia } from "wagmi/chains";
+import { theme } from "./lib/theme";
+import { LogActivityButton } from "./components/LogActivityButton";
+import { fetchProvidersStatus, formatTimeAgo } from "./lib/providerStatus";
+import { useActiveWallet } from "./lib/mockAuth";
 
 // =============================
 // CONFIG
 // =============================
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.trim() || "http://localhost:4000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || "/api";
 
-// Claim contract you deployed (FitRewardsClaim)
+// Claim contract you deployed (FitRewardsClaim) — also the FIT token contract (ERC20)
 const CLAIM_CONTRACT_ADDRESS =
-  "0x24714F0e7a9cCf566E6cfb30B9153303f5667A64";
+  (process.env.NEXT_PUBLIC_CLAIM_CONTRACT?.trim() as `0x${string}` | undefined) ??
+  ("0x24714F0e7a9cCf566E6cfb30B9153303f5667A64" as const);
 
-// FIT token contract (FitRewards "old" token)
-const FIT_TOKEN_ADDRESS =
-  "0xe924F1b1c1a976Cd0D9D23066A83fC648cD38092";
+// In this prototype, FitRewardsClaim is the ERC20, so balanceOf should be read from the same address.
+const FIT_TOKEN_ADDRESS = CLAIM_CONTRACT_ADDRESS;
+
+// Display symbol (keep contract symbol as FIT; UI can show $FIT safely)
+const FIT_SYMBOL_UI = "$FIT";
+
+// Prototype conversion rate: 1 FIT -> USD
+const FIT_USD_RATE = Number(process.env.NEXT_PUBLIC_FIT_USD_RATE || "0");
+
 
 
 // If you want to hide Mock tools in production, flip this to false
@@ -170,6 +180,20 @@ function formatWeiToFit(wei?: bigint) {
   return asNum >= 100 ? asNum.toFixed(2) : asNum.toFixed(3);
 }
 
+function formatUsd(n: number) {
+  if (!Number.isFinite(n)) return "$0.00";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+function fitToUsd(fit: number) {
+  if (!Number.isFinite(fit) || !Number.isFinite(FIT_USD_RATE)) return 0;
+  return fit * FIT_USD_RATE;
+}
+
 function nowId() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -178,8 +202,13 @@ function nowId() {
 // Page
 // =============================
 export default function Page() {
-  const { address, isConnected, connector } = useAccount();
-  const chainId = useChainId();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const { address: activeAddress, source: walletSource } = useActiveWallet();
+  const isSignedIn = Boolean(activeAddress);
+
+  const { address, isConnected, connector, chainId } = useAccount();
   const isOnBaseSepolia = chainId === baseSepolia.id;
 
   const { connect, connectors, isPending: isConnecting } = useConnect();
@@ -314,18 +343,90 @@ export default function Page() {
     null
   );
   const [claimLoading, setClaimLoading] = useState(false);
+  const [homePreviewLoading, setHomePreviewLoading] = useState(false);
 
   const claimableFit = claimPreview?.claimableFit ?? 0;
   const remainingCap = claimPreview?.remainingCap ?? 0;
 
+  const canClaim =
+    Boolean(isSignedIn) &&
+    !homePreviewLoading &&
+    !claimLoading &&
+    claimableFit > 0;
+
   // Keep track of “balance before tx” to compute minted amount on demo logActivity
   const balanceBeforeTxRef = useRef<bigint | null>(null);
+
+  // Auto-load claim preview so Home reflects claimable rewards + today's activities.
+  useEffect(() => {
+    if (!activeAddress) {
+      setClaimPreview(null);
+      setHomePreviewLoading(false);
+      return;
+    }
+
+    setHomePreviewLoading(true);
+    fetch(`${API_BASE_URL}/claim/preview?wallet=${activeAddress}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.ok) setClaimPreview(j);
+      })
+      .catch(() => {
+        // keep silent; home can still render
+      })
+      .finally(() => setHomePreviewLoading(false));
+  }, [activeAddress]);
 
   // =============================
   // Network switch banner logic
   // (always reappears if you switch away again)
   // =============================
-  const shouldShowNetworkBanner = isConnected && !isOnBaseSepolia;
+  const shouldShowNetworkBanner = false;
+
+  // Provider status (real backend-driven)
+  const [lastSyncText, setLastSyncText] = useState("—");
+  const [stravaConnected, setStravaConnected] = useState(false);
+
+  useEffect(() => {
+    if (!activeAddress) {
+      setLastSyncText("—");
+      setStravaConnected(false);
+      return;
+    }
+
+    fetchProvidersStatus(API_BASE_URL, activeAddress)
+      .then((j) => {
+        const strava = j.providers?.find((p) => p.provider === "STRAVA");
+        setStravaConnected(Boolean(strava?.connected));
+        setLastSyncText(formatTimeAgo(strava?.lastActivityAt ?? null));
+      })
+      .catch(() => {
+        // keep UI resilient
+        setLastSyncText("—");
+        setStravaConnected(false);
+      });
+  }, [activeAddress]);
+
+  const streakCount = userStats?.[1] ? Number(userStats[1]) : 0;
+
+  const weekDots = useMemo(() => {
+    const labels = ["M","T","W","T","F","S","S"];
+    const s = Math.max(0, Math.min(7, Number(streakCount || 0)));
+    // mark the first s dots for now (simple prototype)
+    return labels.map((label, i) => ({ label, active: i < s }));
+  }, [streakCount]);
+
+  const capPct = useMemo(() => {
+    const cap = Number(remainingCap || 500);
+    const val = Math.max(0, Math.min(cap, Number(claimableFit || 0)));
+    return cap > 0 ? Math.round((val / cap) * 100) : 0;
+  }, [claimableFit, remainingCap]);
+
+  function badgeForIntensity(score: number) {
+    if (score >= 70) return { label: "HIGH", style: styles.badgeHigh };
+    if (score >= 40) return { label: "MED", style: styles.badgeMed };
+    return { label: "LOW", style: styles.badgeLow };
+  }
 
   const switchToBaseSepolia = useCallback(async () => {
     try {
@@ -436,19 +537,22 @@ export default function Page() {
     writeContractAsync,
   ]);
 
-  // =============================
+// =============================
   // Module 3: Claim preview + claim flow
   // =============================
   const refreshClaimPreview = useCallback(async () => {
-    if (!address) {
-      pushToast("error", "Connect a wallet first.");
+    if (!activeAddress) {
+      pushToast("error", "Sign in first (create/import your wallet)." );
       return;
     }
     setClaimLoading(true);
     try {
-      const url = `${API_BASE_URL}/claim/preview?wallet=${address}`;
+      const url = `${API_BASE_URL}/claim/preview?wallet=${activeAddress}`;
       const res = await fetch(url);
-      const data = (await res.json()) as ClaimPreviewResponse | { error: string };
+      const raw = await res.text();
+      if (!raw) throw new Error("Empty response from API");
+      const data = JSON.parse(raw) as any;
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 
       if (!("ok" in data) || data.ok !== true) {
         const msg = "error" in data ? data.error : "Failed to preview claim.";
@@ -466,7 +570,7 @@ export default function Page() {
     } finally {
       setClaimLoading(false);
     }
-  }, [address, pushToast]);
+  }, [activeAddress, pushToast]);
 
   const claimOnchain = useCallback(
     async (payload: {
@@ -487,28 +591,30 @@ export default function Page() {
   );
 
   const claimFit = useCallback(async () => {
-    if (!address) {
-      pushToast("error", "Connect a wallet first.");
-      return;
-    }
-    if (!isOnBaseSepolia) {
-      pushToast("error", "Please switch to Base Sepolia first.");
+    if (!activeAddress) {
+      pushToast("error", "Sign in first (create/import your wallet)." );
       return;
     }
 
     setModalOpen(true);
     setModalStage("WALLET");
-    setModalTitle("Claim FIT");
+    setModalTitle("Claim $FIT");
     setModalBody("Preparing claim…");
+    setClaimLoading(true);
 
     try {
       // 1) prepare (creates claim record + assigns activities)
       const prepRes = await fetch(`${API_BASE_URL}/claim/prepare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: address }),
+        body: JSON.stringify({ wallet: activeAddress }),
       });
       const prep = (await prepRes.json()) as PrepareResponse;
+
+      // If there was already a pending claim, we just continue it.
+      if ("ok" in prep && prep.ok === true && prep.status === "PENDING" && prep.claimId) {
+        setModalBody("Claim ready — finalizing…");
+      }
 
       if (!("ok" in prep) || prep.ok !== true) {
         const msg = "error" in prep ? prep.error : "Prepare failed";
@@ -516,61 +622,52 @@ export default function Page() {
       }
 
       if (prep.status !== "PENDING" || !prep.claimId) {
-        // nothing to claim / cap reached / not connected
+        const msg =
+          prep.status === "NOTHING_TO_CLAIM"
+            ? "No rewards to claim yet. Tap Log activity first."
+            : prep.status === "DAILY_CAP_REACHED"
+            ? "Daily cap reached. Come back tomorrow."
+            : prep.status === "NOT_CONNECTED"
+            ? "No provider connected yet. Tap Log activity to connect/sync."
+            : prep.status;
+
         setModalStage("ERROR");
-        setModalBody(prep.status);
-        pushToast("info", prep.status);
+        setModalBody(msg);
+        pushToast("info", msg);
         return;
       }
 
-      setModalBody("Signing claim payload…");
-
-      // 2) sign (backend returns signature)
-      const signRes = await fetch(`${API_BASE_URL}/claim/sign`, {
+      // 2) confirm offchain (credit to wallet balance)
+      setModalBody("Crediting your wallet…");
+      const confRes = await fetch(`${API_BASE_URL}/claim/confirm-inapp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: address, claimId: prep.claimId }),
+        body: JSON.stringify({ wallet: activeAddress, claimId: prep.claimId }),
       });
-      const signed = (await signRes.json()) as SignResponse;
+      const conf = (await confRes.json()) as any;
+      if (!confRes.ok || !conf?.ok) throw new Error(conf?.error || "Confirm failed");
 
-      if (!("ok" in signed) || signed.ok !== true) {
-        const msg = "error" in signed ? signed.error : "Sign failed";
-        throw new Error(msg);
-      }
+      setModalStage("CONFIRMED");
+      setModalBody(
+        conf?.credited
+          ? `Claimed ${formatFit(Number(prep.amountFit || 0))} ${FIT_SYMBOL_UI} to your wallet ✅\n\nOpen Wallet to view your balance and transactions.`
+          : `Claim confirmed ✅\n\nOpen Wallet to view your balance and transactions.`
+      );
+      pushToast("success", `Claimed ${formatFit(Number(prep.amountFit || 0))} ${FIT_SYMBOL_UI} ✅`);
 
-      const amountWei = BigInt(signed.amountWei);
-      const deadline = BigInt(String(signed.deadline));
+      // Nudge Wallet page to refresh immediately (same pattern Marketplace uses)
+      window.dispatchEvent(new CustomEvent("fitchain:walletUpdated"));
 
-      // Keep claimId around so we can confirm it in the DB after tx confirms
-      setPendingClaimId(prep.claimId);
-
-      setModalBody("Approve the claim transaction in your wallet…");
-
-      // 3) claim onchain
-      const hash = await claimOnchain({
-        amountWei,
-        claimIdHash: signed.claimIdHash,
-        deadline,
-        signature: signed.signature,
-      });
-
-      setActiveTxKind("CLAIM");
-      setActiveTxHash(hash);
-      setMiniCardOpen(true);
-      setMiniCardTitle("Claim Tx submitted");
-      setMiniCardBody(`Claiming ~${formatFit(prep.amountFit)} FIT…`);
-      setMiniCardHash(hash);
-
-      setModalStage("SUBMITTED");
-      setModalBody("Claim submitted. Waiting for confirmation…");
-      pushToast("info", "Claim submitted. Waiting for confirmation…");
+      refreshClaimPreview();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Claim failed";
       setModalStage("ERROR");
       setModalBody(msg);
       pushToast("error", msg);
+    } finally {
+      setClaimLoading(false);
     }
-  }, [address, isOnBaseSepolia, pushToast, claimOnchain]);
+  }, [activeAddress, pushToast, refreshClaimPreview]);
 
   // =============================
   // Tx status reaction
@@ -701,311 +798,197 @@ export default function Page() {
       )}
 
       {/* Header */}
-      <div style={styles.header}>
-        <div>
-          <div style={styles.brand}>FitChain</div>
-          <div style={styles.sub}>
-            Proof-of-Sweat → Onchain Rewards (Base Sepolia prototype)
-          </div>
-        </div>
-        <div style={styles.rightTop}>
-          {isConnected ? (
-            <div style={styles.pill}>
-              <span style={{ marginRight: 8 }}>Connected:</span>
-              <b>{shortAddr(address)}</b>
-              <button style={styles.linkBtn} onClick={() => disconnect()}>
-                Disconnect
-              </button>
+      <div style={styles.homeHeader}>
+        <div style={styles.homeTitle}>FITCHAIN</div>
+
+        {/* Wallet chip */}
+        {!mounted ? (
+          <div style={styles.walletChip} />
+        ) : isConnected ? (
+          <Link href="/wallet" style={{ textDecoration: "none" } as any} aria-label="Open wallet">
+            <div style={{ ...styles.walletChip, cursor: "pointer" }}>
+              <div style={styles.walletDot} />
+              <div style={styles.walletAddr}>{shortAddr(address)}</div>
             </div>
-          ) : (
-            <div style={styles.pill}>
-              {connectors
-                .filter((c) => c.id !== "injected" || c.name)
-                .map((c) => (
-                  <button
-                    key={c.id}
-                    style={styles.primaryBtn}
-                    disabled={isConnecting}
-                    onClick={() => connect({ connector: c })}
-                  >
-                    Connect {c.name ?? "Wallet"}
-                  </button>
-                ))}
+          </Link>
+        ) : isSignedIn && activeAddress ? (
+          <Link href="/wallet" style={{ textDecoration: "none" } as any} aria-label="Open wallet">
+            <div style={{ ...styles.walletChip, cursor: "pointer" }}>
+              <div style={styles.walletDot} />
+              <div style={styles.walletAddr}>{shortAddr(activeAddress)}</div>
+              <div style={{ marginLeft: 8, opacity: 0.6, fontSize: 12 }}>wallet</div>
             </div>
-          )}
-        </div>
+          </Link>
+        ) : (
+          <Link
+            href="/settings"
+            style={{ ...styles.walletChip, opacity: 0.85, textDecoration: "none" } as any}
+            aria-label="Create a wallet"
+          >
+            <div style={styles.walletDot} />
+            <div style={styles.walletAddr}>Create wallet</div>
+          </Link>
+        )}
       </div>
 
-      {/* Network banner */}
+      {/* Network banner (only blocks Mint/claim) */}
       {shouldShowNetworkBanner && (
-        <div style={styles.banner}>
-          <div>
-            You’re on the wrong network. Switch to <b>Base Sepolia</b> to use
-            FitChain.
-          </div>
-          <button
-            style={styles.bannerBtn}
-            onClick={switchToBaseSepolia}
-            disabled={isSwitching}
-          >
-            Switch to Base Sepolia
+        <div style={styles.netBanner}>
+          <div style={{ fontWeight: 900 }}>Switch to Base Sepolia to mint $FIT</div>
+          <button style={styles.netBannerBtn} onClick={switchToBaseSepolia} disabled={isSwitching}>
+            Switch
           </button>
         </div>
       )}
 
-      {/* Main grid */}
-      <div style={styles.grid}>
-        {/* Left: Dashboard */}
-        <div style={styles.card}>
-          <div style={styles.cardTitle}>Dashboard</div>
-
-          <div style={styles.kpiRow}>
-            <div style={styles.kpi}>
-              <div style={styles.kpiLabel}>FIT Balance</div>
-              <div style={styles.kpiValue}>
-                {isFetchingFitBalance ? "…" : fitBalanceDisplay}{" "}
-                <span style={styles.kpiUnit}>FIT</span>
-              </div>
-            </div>
-
-            <div style={styles.kpi}>
-              <div style={styles.kpiLabel}>Streak</div>
-              <div style={styles.kpiValue}>{isFetchingUserStats ? "…" : streak}</div>
-            </div>
-
-            <div style={styles.kpi}>
-              <div style={styles.kpiLabel}>Total Earned</div>
-              <div style={styles.kpiValue}>
-                {isFetchingUserStats ? "…" : formatFit(totalEarnedWhole)}{" "}
-                <span style={styles.kpiUnit}>FIT</span>
-              </div>
-            </div>
-          </div>
-
-          <div style={styles.metaRow}>
-            <div style={styles.meta}>
-              <span style={styles.metaKey}>Chain</span>
-              <span style={styles.metaVal}>
-                {isConnected ? (isOnBaseSepolia ? "Base Sepolia ✅" : `ChainId ${chainId}`) : "—"}
-              </span>
-            </div>
-            <div style={styles.meta}>
-              <span style={styles.metaKey}>Gas (native)</span>
-              <span style={styles.metaVal}>
-                {isFetchingNativeBalance ? "…" : walletNativeBalance?.value ? (Number(walletNativeBalance.value) / 1e18).toFixed(4) : "0"}{" "}
-                {walletNativeBalance?.symbol ?? ""}
-              </span>
-            </div>
-            <div style={styles.meta}>
-              <span style={styles.metaKey}>Last Activity Day</span>
-              <span style={styles.metaVal}>{isFetchingUserStats ? "…" : lastActivityDay}</span>
-            </div>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Workout Demo */}
-          <div style={styles.sectionTitle}>Workout Demo</div>
-          <div style={styles.row}>
-            <button
-              style={styles.primaryBtn}
-              onClick={startWorkout}
-              disabled={!isConnected || !isOnBaseSepolia || workoutRunning}
-              title={!isOnBaseSepolia ? "Switch to Base Sepolia" : ""}
-            >
-              Start Workout ({DEMO_WORKOUT_SECONDS}s)
-            </button>
-
-            <div style={styles.timerBox}>
-              <div style={styles.timerLabel}>Countdown</div>
-              <div style={styles.timerValue}>
-                {workoutRunning ? secondsLeft : "—"}
-              </div>
-            </div>
-
-            <button
-              style={styles.secondaryBtn}
-              onClick={confirmActivity}
-              disabled={!isConnected || !isOnBaseSepolia || workoutRunning || secondsLeft > 0}
-              title={
-                workoutRunning
-                  ? "Wait for workout to finish"
-                  : secondsLeft > 0
-                  ? "Start workout first"
-                  : ""
-              }
-            >
-              Confirm Activity → Mint
-            </button>
-          </div>
-
-          <div style={styles.hint}>
-            Tip: If you already logged today, the contract may revert with
-            “Already logged today” (we kept the daily limit for realism).
+      {/* Today */}
+      <div style={styles.cardSoft}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>Today</div>
+          <div style={styles.providerPill}>
+            <span style={styles.providerDot} />
+            <span style={{ opacity: 0.9 }}>Strava</span>
+            <span style={{ opacity: 0.65, marginLeft: 6 }}>
+              {stravaConnected ? "Connected" : "Not connected"}
+            </span>
           </div>
         </div>
-
-        {/* Right: Claim Module (Module 3) */}
-        <div style={styles.card}>
-          <div style={styles.cardTitle}>Module 3 — Claim FIT (API Proof)</div>
-
-          <div style={styles.row}>
-            <button
-              style={styles.primaryBtn}
-              onClick={() => refreshClaimPreview()}
-              disabled={!isConnected || claimLoading}
-            >
-              {claimLoading ? "Refreshing…" : "Refresh Claim Preview"}
-            </button>
-
-            <button
-              style={styles.secondaryBtn}
-              onClick={claimFit}
-              disabled={
-                !isConnected ||
-                !isOnBaseSepolia ||
-                claimLoading ||
-                !claimPreview ||
-                claimableFit <= 0 ||
-                remainingCap <= 0
-              }
-              title={!isOnBaseSepolia ? "Switch to Base Sepolia" : ""}
-            >
-              Claim FIT
-            </button>
-          </div>
-
-          {!isConnected && (
-            <div style={styles.hint}>
-              Connect your wallet to preview claimable FIT from activities.
-            </div>
-          )}
-
-          {claimPreview && (
-            <div style={{ marginTop: 14 }}>
-              <div style={styles.kpiRow}>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Day</div>
-                  <div style={styles.kpiValue}>{claimPreview.dayKey}</div>
-                </div>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Daily Cap</div>
-                  <div style={styles.kpiValue}>
-                    {formatFit(claimPreview.dailyCap)} <span style={styles.kpiUnit}>FIT</span>
-                  </div>
-                </div>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Remaining Cap</div>
-                  <div style={styles.kpiValue}>
-                    {formatFit(claimPreview.remainingCap)}{" "}
-                    <span style={styles.kpiUnit}>FIT</span>
-                  </div>
-                </div>
-              </div>
-
-              <div style={styles.kpiRow}>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Already Claimed</div>
-                  <div style={styles.kpiValue}>
-                    {formatFit(claimPreview.alreadyClaimed)}{" "}
-                    <span style={styles.kpiUnit}>FIT</span>
-                  </div>
-                </div>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Total (uncapped)</div>
-                  <div style={styles.kpiValue}>
-                    {formatFit(claimPreview.totalUncapped)}{" "}
-                    <span style={styles.kpiUnit}>FIT</span>
-                  </div>
-                </div>
-                <div style={styles.kpi}>
-                  <div style={styles.kpiLabel}>Claimable Now</div>
-                  <div style={styles.kpiValue}>
-                    {formatFit(claimPreview.claimableFit)}{" "}
-                    <span style={styles.kpiUnit}>FIT</span>
-                  </div>
-                </div>
-              </div>
-
-              <div style={styles.divider} />
-
-              {claimPreview.remainingCap <= 0 ? (
-                <div style={styles.hint}>
-                  Daily cap reached ✅ Activities are hidden (as requested).
-                </div>
-              ) : (
-                <>
-                  <div style={styles.sectionTitle}>Activities (today)</div>
-                  {claimPreview.activities.length === 0 ? (
-                    <div style={styles.hint}>
-                      No activities found yet. If Strava is empty, use the mock
-                      tool to test the full pipeline.
-                    </div>
-                  ) : (
-                    <div style={styles.activityList}>
-                      {claimPreview.activities.map((a) => (
-                        <div key={a.id} style={styles.activityItem}>
-                          <div style={styles.activityTop}>
-                            <b>{a.type}</b>{" "}
-                            <span style={styles.dim}>
-                              · {a.provider} · {new Date(a.startTime).toLocaleString()}
-                            </span>
-                          </div>
-                          <div style={styles.activityRow}>
-                            <span>Duration: {Math.round(a.durationSec / 60)} min</span>
-                            <span>Distance: {(a.distanceM / 1000).toFixed(2)} km</span>
-                            <span>Intensity: {a.intensityScore}</span>
-                            <span>Genuine: {a.genuineScore}</span>
-                          </div>
-                          <div style={styles.activityEarn}>
-                            +{formatFit(a.fitEarned)} FIT
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {SHOW_DEV_TOOLS && (
-                <>
-                  <div style={styles.divider} />
-                  <div style={styles.sectionTitle}>Dev Tools</div>
-                  <button
-                    style={styles.secondaryBtn}
-                    disabled={!isConnected}
-                    onClick={async () => {
-                      if (!address) return;
-                      try {
-                        const r = await fetch(`${API_BASE_URL}/dev/mock-activity`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ wallet: address }),
-                        });
-                        const j = (await r.json()) as { ok?: boolean; error?: string };
-                        if (j.ok) {
-                          pushToast("success", "Mock activity inserted ✅");
-                          refreshClaimPreview();
-                        } else {
-                          pushToast("error", j.error ?? "Mock failed");
-                        }
-                      } catch (e) {
-                        pushToast("error", e instanceof Error ? e.message : "Mock failed");
-                      }
-                    }}
-                  >
-                    Insert Mock Activity
-                  </button>
-                  <div style={styles.hint}>
-                    This is only for testing while Strava is empty.
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+        <div style={{ marginTop: 8, opacity: 0.75, fontSize: 13 }}>
+          Last sync: {lastSyncText}
         </div>
       </div>
 
+      {/* Streak */}
+      <div style={styles.cardSoft}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={styles.streakIcon}>🔥</div>
+          <div>
+            <div style={{ fontSize: 28, fontWeight: 900, lineHeight: 1 }}>{streakCount}</div>
+            <div style={{ opacity: 0.7, fontSize: 12, marginTop: 2 }}>Day Streak</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14 }}>
+          {weekDots.map((d) => (
+            <div key={d.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={d.active ? styles.dayDotActive : styles.dayDot}>
+                {d.active ? "✓" : ""}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.65 }}>{d.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Rewards */}
+      <div style={styles.rewardsCard}>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>Rewards</div>
+
+        <div style={{ marginTop: 10, display: "flex", alignItems: "baseline", gap: 10 }}>
+          <div style={styles.rewardsBig}>{formatFit(claimableFit)}</div>
+          <div style={{ fontWeight: 900, opacity: 0.9 }}>$FIT</div>
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.75 }}>≈ {formatUsd(fitToUsd(claimableFit))} USD</div>
+
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", fontSize: 12, opacity: 0.75 }}>
+          <div>Daily Cap</div>
+          <div>
+            {formatFit(Math.min(claimableFit, remainingCap))} / {formatFit(remainingCap || 500)}
+          </div>
+        </div>
+
+        <div style={styles.capBar}>
+          <div
+            style={{
+              ...styles.capFill,
+              width: `${capPct}%`,
+            }}
+          />
+        </div>
+
+        <button
+          style={{
+            ...styles.mintBtn,
+            opacity: canClaim ? 1 : 0.5,
+            cursor: canClaim ? "pointer" : "not-allowed",
+            userSelect: "none",
+            textAlign: "center",
+          }}
+          disabled={!canClaim}
+          aria-busy={claimLoading || homePreviewLoading}
+          onClick={() => {
+            if (!canClaim) return;
+            claimFit();
+          }}
+        >
+          {claimLoading ? "Claiming…" : homePreviewLoading ? "Checking…" : "Claim to Wallet"}
+        </button>
+
+        {isSignedIn && claimableFit <= 0 && !homePreviewLoading && (
+          <div style={{ marginTop: 10, opacity: 0.65, fontSize: 12, textAlign: "center" }}>
+            No claimable rewards yet — log an activity to generate rewards.
+          </div>
+        )}
+
+        {!isSignedIn && (
+          <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12, textAlign: "center" }}>
+            Create or import a wallet in <Link href="/settings" style={{ color: theme.colors.accent, fontWeight: 900, textDecoration: "none" }}>Settings</Link> to claim.
+          </div>
+        )}
+
+        <div style={{ marginTop: 10, opacity: 0.6, fontSize: 12, textAlign: "center" }}>
+          Unclaimed rewards: 20% burned, 80% carry forward
+        </div>
+      </div>
+
+      <div style={styles.homeDivider} />
+
+      {/* Today's Activities */}
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontWeight: 900, fontSize: 16, marginBottom: 10 }}>Today's Activities</div>
+
+        {claimPreview?.activities?.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {claimPreview.activities.map((a) => (
+              <div key={a.id} style={styles.activityRowCard}>
+                <div style={styles.activityIconWrap}>{a.type === "RUN" ? "🔥" : "👣"}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontWeight: 900 }}>{a.type}</div>
+                    <div style={badgeForIntensity(a.intensityScore).style}>{badgeForIntensity(a.intensityScore).label}</div>
+                  </div>
+                  <div style={{ marginTop: 6, opacity: 0.75, fontSize: 12 }}>
+                    {Math.round(a.durationSec / 60)}m · {(a.distanceM / 1000).toFixed(1)} km
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ color: theme.colors.accent, fontWeight: 900 }}>
+                    +{formatFit(a.fitEarned)} $FIT
+                  </div>
+                  <div style={{ marginTop: 4, opacity: 0.7, fontSize: 12 }}>
+                    ≈ {formatUsd(fitToUsd(a.fitEarned))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ opacity: 0.75 }}>
+            No activities yet. Tap Log activity to sync from your provider.
+          </div>
+        )}
+      </div>
+
+      {/* Log activity button (same action as Activity tab) */}
+      <div style={{ marginTop: 14 }}>
+        <LogActivityButton
+          apiBaseUrl={API_BASE_URL}
+          walletAddress={activeAddress}
+          disabled={!isSignedIn || claimLoading}
+          pushToast={pushToast}
+          onPreviewUpdated={(p) => setClaimPreview(p)}
+        />
+      </div>
       {/* Mini card (stays until user closes) */}
       {miniCardOpen && (
         <div style={styles.miniCard}>
@@ -1076,9 +1059,36 @@ export default function Page() {
               )}
 
               <div style={{ marginTop: 14, display: "flex", gap: 10 }}>
-                <button style={styles.secondaryBtn} onClick={closeModalNow}>
-                  Close
-                </button>
+                {modalStage === "ERROR" ? (
+                  <>
+                    <button
+                      style={styles.primaryBtn}
+                      onClick={() => {
+                        closeModalNow();
+                        // re-run claim flow
+                        setTimeout(() => claimFit(), 50);
+                      }}
+                    >
+                      Try again
+                    </button>
+                    <button style={styles.secondaryBtn} onClick={closeModalNow}>
+                      Close
+                    </button>
+                  </>
+                ) : modalStage === "CONFIRMED" ? (
+                  <>
+                    <button style={styles.primaryBtn} onClick={closeModalNow}>
+                      Done
+                    </button>
+                    <a href="/wallet" style={styles.secondaryBtn as any}>
+                      View Wallet
+                    </a>
+                  </>
+                ) : (
+                  <button style={styles.secondaryBtn} onClick={closeModalNow}>
+                    Close
+                  </button>
+                )}
               </div>
 
               {modalStage === "CONFIRMED" && (
@@ -1100,9 +1110,9 @@ export default function Page() {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(180deg, #0b1020 0%, #070a12 70%)",
+    background: "radial-gradient(1200px 800px at 50% -20%, rgba(204,255,0,0.22) 0%, rgba(0,0,0,0) 60%), linear-gradient(180deg, #05070B 0%, #000000 75%)",
     color: "white",
-    padding: 24,
+    padding: 18,
     fontFamily:
       'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
   },
@@ -1200,12 +1210,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   primaryBtn: {
     padding: "10px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(120, 90, 255, 0.35)",
-    color: "white",
+    borderRadius: theme.radius.btn,
+    border: `1px solid ${theme.colors.border}`,
+    background: theme.colors.accent,
+    boxShadow: `0 10px 26px ${theme.colors.accentGlow}`,
+    color: theme.colors.accentText,
     cursor: "pointer",
-    fontWeight: 800,
+    fontWeight: 900,
   },
   secondaryBtn: {
     padding: "10px 12px",
@@ -1312,7 +1323,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   toastSuccess: { borderColor: "rgba(0, 255, 180, 0.35)" },
   toastError: { borderColor: "rgba(255, 80, 80, 0.40)" },
-  toastInfo: { borderColor: "rgba(120, 140, 255, 0.35)" },
+  toastInfo: { borderColor: theme.colors.accentSoft },
 
   miniCard: {
     position: "fixed",
@@ -1332,7 +1343,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-block",
     marginTop: 10,
     fontSize: 13,
-    color: "rgba(190, 200, 255, 0.95)",
+    color: theme.colors.accent,
     textDecoration: "underline",
     cursor: "pointer",
   },
@@ -1371,8 +1382,8 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(255,255,255,0.14)",
     background: "rgba(255,255,255,0.08)",
     borderRadius: 10,
-    width: 34,
-    height: 34,
+    width: 36,
+    height: 36,
     color: "white",
     cursor: "pointer",
     fontWeight: 900,
@@ -1392,6 +1403,209 @@ const styles: Record<string, React.CSSProperties> = {
     animationTimingFunction: "cubic-bezier(0.2, 0.6, 0.2, 1)",
     animationFillMode: "forwards",
   },
+
+  // ===== Home (screenshot-inspired) =====
+  homeHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  homeTitle: {
+    fontSize: 20,
+    fontWeight: 900,
+    letterSpacing: 0.8,
+  },
+  walletChip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderRadius: 999,
+    border: `1px solid ${theme.colors.border}`,
+    background: "rgba(255,255,255,0.06)",
+    minWidth: 132,
+    justifyContent: "center",
+  },
+  walletDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    background: theme.colors.accent,
+    boxShadow: `0 0 18px ${theme.colors.accentGlow}`,
+  },
+  walletAddr: {
+    fontWeight: 900,
+    fontSize: 13,
+    opacity: 0.95,
+  },
+  netBanner: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 16,
+    border: `1px solid ${theme.colors.accentSoft}`,
+    background: theme.colors.accentSoft,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
+  netBannerBtn: {
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: `1px solid ${theme.colors.border}`,
+    background: theme.colors.accent,
+    color: theme.colors.accentText,
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  cardSoft: {
+    borderRadius: 20,
+    border: `1px solid ${theme.colors.border}`,
+    background: "rgba(255,255,255,0.06)",
+    padding: 16,
+    boxShadow: "0 14px 40px rgba(0,0,0,0.45)",
+    marginBottom: 12,
+  },
+  providerPill: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "7px 10px",
+    borderRadius: 999,
+    border: `1px solid ${theme.colors.border}`,
+    background: "rgba(255,255,255,0.04)",
+    fontSize: 12,
+  },
+  providerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    background: theme.colors.success,
+  },
+  streakIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: theme.colors.accentSoft,
+    boxShadow: `0 10px 20px ${theme.colors.accentGlow}`,
+    fontSize: 18,
+  },
+  dayDot: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    border: `1px solid ${theme.colors.border}`,
+    background: "rgba(255,255,255,0.06)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "rgba(255,255,255,0.5)",
+    fontWeight: 900,
+  },
+  dayDotActive: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    border: `1px solid ${theme.colors.accentSoft}`,
+    background: theme.colors.accent,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: theme.colors.accentText,
+    fontWeight: 900,
+    boxShadow: `0 10px 20px ${theme.colors.accentGlow}`,
+  },
+  rewardsCard: {
+    borderRadius: 18,
+    border: `1px solid ${theme.colors.border}`,
+    background: `linear-gradient(180deg, rgba(204,255,0,0.20) 0%, rgba(0,0,0,0.10) 80%)`,
+    padding: 16,
+    boxShadow: "0 14px 40px rgba(0,0,0,0.45)",
+    marginBottom: 12,
+  },
+  rewardsBig: {
+    fontSize: 36,
+    fontWeight: 900,
+    color: "white",
+    letterSpacing: 0.2,
+  },
+  capBar: {
+    marginTop: 10,
+    height: 10,
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.10)",
+    overflow: "hidden",
+  },
+  capFill: {
+    height: "100%",
+    borderRadius: 999,
+    background: theme.colors.accent,
+    boxShadow: `0 10px 24px ${theme.colors.accentGlow}`,
+  },
+  mintBtn: {
+    marginTop: 12,
+    width: "100%",
+    padding: "16px 14px",
+    borderRadius: 16,
+    border: `1px solid ${theme.colors.border}`,
+    background: theme.colors.accent,
+    color: theme.colors.accentText,
+    fontWeight: 900,
+    cursor: "pointer",
+    boxShadow: `0 12px 28px ${theme.colors.accentGlow}`,
+  },
+  activityRowCard: {
+    borderRadius: 18,
+    border: `1px solid ${theme.colors.border}`,
+    background: "rgba(255,255,255,0.06)",
+    padding: 14,
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+  },
+  activityIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(255,255,255,0.06)",
+    border: `1px solid ${theme.colors.border}`,
+    fontSize: 18,
+  },
+  badgeHigh: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "rgba(255, 60, 60, 0.20)",
+    border: "1px solid rgba(255, 60, 60, 0.35)",
+    color: "#FF8080",
+  },
+  badgeMed: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "rgba(255, 173, 51, 0.18)",
+    border: "1px solid rgba(255, 173, 51, 0.35)",
+    color: "#FFB84D",
+  },
+  badgeLow: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: theme.colors.accentSoft,
+    border: `1px solid ${theme.colors.accentSoft}`,
+    color: theme.colors.accent,
+  },
+
 };
 
 // inject keyframes
