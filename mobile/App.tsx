@@ -80,25 +80,46 @@ export default function App() {
   async function googleLogin() {
     if (!GOOGLE_CLIENT_ID) throw new Error('Missing googleClientId in app.json');
 
-    // Expo SDK 54+ prefers the session APIs.
+    // Use Authorization Code flow (with PKCE) and then exchange code for tokens to get id_token.
     const discovery = {
       authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenEndpoint: 'https://oauth2.googleapis.com/token',
     };
 
     const request = new (AuthSession as any).AuthRequest({
       clientId: GOOGLE_CLIENT_ID,
       redirectUri,
-      responseType: (AuthSession as any).ResponseType?.IdToken ?? 'id_token',
+      responseType: (AuthSession as any).ResponseType?.Code ?? 'code',
       scopes: ['openid', 'email', 'profile'],
-      extraParams: { nonce: String(Date.now()) },
+      usePKCE: true,
+      extraParams: {
+        // Required by Google when requesting OpenID claims
+        nonce: String(Date.now()),
+        // Recommended for installed apps
+        prompt: 'select_account',
+      },
     });
 
     const result: any = await request.promptAsync(discovery, { useProxy: true });
     if (!result || result.type !== 'success') return;
 
-    // `id_token` comes back in params
-    const idToken = result.params?.id_token;
-    if (!idToken) throw new Error('Missing id_token in Google response');
+    const code = result.params?.code;
+    if (!code) throw new Error('Missing code in Google response');
+
+    const tokenRes = await (AuthSession as any).exchangeCodeAsync(
+      {
+        clientId: GOOGLE_CLIENT_ID,
+        code,
+        redirectUri,
+        extraParams: {
+          code_verifier: request.codeVerifier,
+        },
+      },
+      discovery,
+    );
+
+    const idToken = tokenRes?.idToken || tokenRes?.id_token;
+    if (!idToken) throw new Error('Missing id_token after token exchange');
 
     const json = await apiFetch('/auth/google', {
       method: 'POST',
