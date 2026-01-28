@@ -80,19 +80,24 @@ export default function App() {
   async function googleLogin() {
     if (!GOOGLE_CLIENT_ID) throw new Error('Missing googleClientId in app.json');
 
-    const authUrl =
-      'https://accounts.google.com/o/oauth2/v2/auth' +
-      `?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-      `&response_type=${encodeURIComponent('id_token')}` +
-      `&scope=${encodeURIComponent('openid email profile')}` +
-      `&nonce=${encodeURIComponent(String(Date.now()))}`;
+    // Expo SDK 54+ prefers the session APIs.
+    const discovery = {
+      authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    };
 
-    const result = await AuthSession.startAsync({ authUrl });
-    if (result.type !== 'success') return;
+    const request = new (AuthSession as any).AuthRequest({
+      clientId: GOOGLE_CLIENT_ID,
+      redirectUri,
+      responseType: (AuthSession as any).ResponseType?.IdToken ?? 'id_token',
+      scopes: ['openid', 'email', 'profile'],
+      extraParams: { nonce: String(Date.now()) },
+    });
+
+    const result: any = await request.promptAsync(discovery, { useProxy: true });
+    if (!result || result.type !== 'success') return;
 
     // `id_token` comes back in params
-    const idToken = (result.params as any).id_token;
+    const idToken = result.params?.id_token;
     if (!idToken) throw new Error('Missing id_token in Google response');
 
     const json = await apiFetch('/auth/google', {
