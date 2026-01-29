@@ -27,7 +27,8 @@
     },
     "extra": {
       "apiBaseUrl": "https://fitchain.duckdns.org/api",
-      "googleClientId": "100437998164-nbpniuldunb9dooackj7b4k8tmosiqtm.apps.googleusercontent.com"
+      "googleClientIdWeb": "100437998164-nbpniuldunb9dooackj7b4k8tmosiqtm.apps.googleusercontent.com",
+      "googleClientIdIos": "100437998164-230e657b0nhkacd5oq95rob0suja6brk.apps.googleusercontent.com"
     }
   }
 }

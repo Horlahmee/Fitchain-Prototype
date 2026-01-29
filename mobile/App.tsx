@@ -9,7 +9,8 @@ type Tokens = { accessToken: string; refreshToken: string };
 
 const extra = (Constants.expoConfig?.extra ?? {}) as any;
 const API_BASE_URL: string = extra.apiBaseUrl || 'http://localhost:4000';
-const GOOGLE_CLIENT_ID: string = extra.googleClientId;
+const GOOGLE_CLIENT_ID_WEB: string = extra.googleClientIdWeb;
+const GOOGLE_CLIENT_ID_IOS: string = extra.googleClientIdIos;
 
 const ACCESS_KEY = 'fit_access_token';
 const REFRESH_KEY = 'fit_refresh_token';
@@ -81,7 +82,10 @@ export default function App() {
   }
 
   async function googleLogin() {
-    if (!GOOGLE_CLIENT_ID) throw new Error('Missing googleClientId in app.json');
+    // For Expo Go testing on iPhone, use the iOS client id.
+    // (Web client id can fail on auth.expo.io during the code exchange.)
+    const clientId = GOOGLE_CLIENT_ID_IOS || GOOGLE_CLIENT_ID_WEB;
+    if (!clientId) throw new Error('Missing google client id in app.json');
 
     // Use Authorization Code flow (with PKCE) and then exchange code for tokens to get id_token.
     const discovery = {
@@ -90,7 +94,7 @@ export default function App() {
     };
 
     const request = new (AuthSession as any).AuthRequest({
-      clientId: GOOGLE_CLIENT_ID,
+      clientId,
       redirectUri,
       responseType: (AuthSession as any).ResponseType?.Code ?? 'code',
       scopes: ['openid', 'email', 'profile'],
@@ -111,7 +115,7 @@ export default function App() {
 
     const tokenRes = await (AuthSession as any).exchangeCodeAsync(
       {
-        clientId: GOOGLE_CLIENT_ID,
+        clientId,
         code,
         redirectUri,
         extraParams: {
