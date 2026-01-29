@@ -82,10 +82,10 @@ export default function App() {
   }
 
   async function googleLogin() {
-    // For Expo Go testing on iPhone, use the iOS client id.
-    // (Web client id can fail on auth.expo.io during the code exchange.)
-    const clientId = GOOGLE_CLIENT_ID_IOS || GOOGLE_CLIENT_ID_WEB;
-    if (!clientId) throw new Error('Missing google client id in app.json');
+    // When using the Expo Auth proxy redirect (auth.expo.io), use the Web client id.
+    // Platform (iOS/Android) client ids are for native scheme redirects in standalone builds.
+    const clientId = GOOGLE_CLIENT_ID_WEB;
+    if (!clientId) throw new Error('Missing googleClientIdWeb in app.json');
 
     // Use Authorization Code flow (with PKCE) and then exchange code for tokens to get id_token.
     const discovery = {
