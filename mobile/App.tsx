@@ -48,8 +48,9 @@ export default function App() {
   const [otp, setOtp] = useState('');
   const [wallet, setWallet] = useState('0x');
   const [status, setStatus] = useState<string>('Not logged in');
-  const redirectUri = useMemo(() => AuthSession.makeRedirectUri({ useProxy: true }), []);
-  // TEMP debug: helps confirm we are using the Expo proxy redirect (auth.expo.io) and not exp://...
+  // Dev-time: hardcode Expo Auth proxy redirect to avoid exp:// redirect_uri mismatches.
+  // NOTE: this must match the Authorized redirect URI set in Google Cloud Console.
+  const redirectUri = 'https://auth.expo.io/@fitchain/fitchain';
   console.log('redirectUri', redirectUri);
 
   async function saveTokens(t: Tokens) {
