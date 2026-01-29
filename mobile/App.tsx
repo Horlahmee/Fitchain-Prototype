@@ -49,6 +49,8 @@ export default function App() {
   const [wallet, setWallet] = useState('0x');
   const [status, setStatus] = useState<string>('Not logged in');
   const redirectUri = useMemo(() => AuthSession.makeRedirectUri({ useProxy: true }), []);
+  // TEMP debug: helps confirm we are using the Expo proxy redirect (auth.expo.io) and not exp://...
+  console.log('redirectUri', redirectUri);
 
   async function saveTokens(t: Tokens) {
     await SecureStore.setItemAsync(ACCESS_KEY, t.accessToken);
